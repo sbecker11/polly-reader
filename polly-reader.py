@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 
 import boto3
@@ -8,7 +9,43 @@ import subprocess
 import platform
 
 MAX_TEXT_LENGTH = 10000
-MIN_TEXT_LENGTH = 100
+MIN_TEXT_LENGTH = 2
+
+ENGINE_VOICES = {
+    "standard": [
+        "Ivy", "Joanna", "Joey", "Justin", "Kendra", "Kimberly", "Matthew", "Salli",
+    ],
+    "neural": [
+        "Danielle", "Gregory", "Ivy", "Joanna", "Joey", "Justin", "Kendra", "Kevin",
+        "Kimberly", "Matthew", "Ruth", "Salli", "Stephen",
+    ],
+    "long-form": ["Danielle", "Gregory"],
+}
+
+VALID_ENGINES = tuple(ENGINE_VOICES.keys())
+
+
+def validate_engine(engine: str) -> None:
+    if engine is None:
+        raise ValueError(f"Engine is None")
+    if engine not in ENGINE_VOICES:
+        raise ValueError(
+            f"Engine '{engine}' is not valid. "
+            f"Valid engines: {', '.join(VALID_ENGINES)}"
+        )
+
+
+def validate_voice_for_engine(engine: str, voice_id: str) -> None:
+    if engine is None:
+        raise ValueError(f"Engine is None")
+    if voice_id is None:
+        raise ValueError(f"Voice ID is None")
+    valid_voices = ENGINE_VOICES.get(engine, [])
+    if voice_id not in valid_voices:
+        raise ValueError(
+            f"Voice '{voice_id}' is not valid for engine '{engine}'. "
+            f"Valid voices: {', '.join(valid_voices)}"
+        )
 
 def is_valid_file(file_path: str) -> bool:
     try:
@@ -67,15 +104,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="AWS region for Polly (default: us-east-1).",
     )
     parser.add_argument(
-        "--voice-id",
-        default="Matthew",
-        help="Polly voice ID (default: Matthew).",
-    )
-    parser.add_argument(
         "--engine",
         default="neural",
-        choices=["standard", "neural", "long-form", "generative"],
-        help="Polly synthesis engine (default: neural).",
+        help="Polly synthesis engine (default: neural). Choices: standard, neural, long-form.",
+    )
+    parser.add_argument(
+        "--voice-id",
+        default="Matthew",
+        help="Polly voice ID for the selected engine (default: Matthew).",
     )
     parser.add_argument(
         "--output-format",
@@ -94,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    engine = args.engine
+    validate_engine(engine)
+
+    voice_id = args.voice_id
+    validate_voice_for_engine(engine, voice_id)
 
     region = args.region
     if region is None:
@@ -186,4 +228,8 @@ def main() -> None:
         raise RuntimeError(f"Unsupported system: {system}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as e:
+        print(f"{type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(2)
