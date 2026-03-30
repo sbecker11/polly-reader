@@ -1,12 +1,13 @@
 import argparse
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import boto3
 import os
-import time
-import subprocess
 import platform
+import time
 
 MAX_TEXT_LENGTH = 10000
 MIN_TEXT_LENGTH = 2
@@ -83,11 +84,76 @@ def is_valid_mp3_file(mp3_file_path: str) -> bool:
         print(f"Error {e} validating mp3_file_path: {mp3_file_path}")
         return False
 
+
+def read_clipboard_text() -> str:
+    system = platform.system()
+    if system == "Darwin":
+        r = subprocess.run(
+            ["pbpaste"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            raise RuntimeError("pbpaste failed (macOS clipboard unavailable in this environment)")
+        return r.stdout
+    if system == "Linux":
+        for cmd in (
+            ["xclip", "-selection", "clipboard", "-o"],
+            ["xsel", "-b", "-o"],
+        ):
+            if shutil.which(cmd[0]):
+                r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if r.returncode == 0:
+                    return r.stdout
+        raise ValueError(
+            "Clipboard on Linux needs xclip or xsel installed, or use --stdin with a pipe."
+        )
+    raise ValueError(
+        f"Clipboard input is not supported on {system}; use --stdin or a .txt file."
+    )
+
+
+def get_synthesis_text(args: argparse.Namespace) -> str:
+    n = sum(
+        [
+            args.textfile is not None,
+            args.text is not None,
+            args.stdin,
+            args.clipboard,
+        ]
+    )
+    if n != 1:
+        raise ValueError(
+            "Provide exactly one text source: a .txt file path, --text, --stdin, or --clipboard."
+        )
+    if args.textfile is not None:
+        if not is_valid_text_file(args.textfile):
+            raise ValueError(f"textfile is not valid: {args.textfile}")
+        return Path(args.textfile).read_text(encoding="utf-8").strip()
+    if args.text is not None:
+        return args.text.strip()
+    if args.stdin:
+        return sys.stdin.read().strip()
+    if args.clipboard:
+        return read_clipboard_text().strip()
+    raise RuntimeError("internal error: no text source selected")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Start an Amazon Polly speech synthesis task from a text file."
+        description=(
+            "Start an Amazon Polly speech synthesis task. "
+            "Supply text via a .txt file, --text, --stdin (e.g. pipe pbpaste), or --clipboard."
+        )
     )
-    parser.add_argument("textfile", help="Path to a UTF-8 text file to synthesize.")
+    parser.add_argument(
+        "textfile",
+        nargs="?",
+        default=None,
+        metavar="textfile",
+        help="Path to a UTF-8 .txt file (omit if using --text, --stdin, or --clipboard).",
+    )
     parser.add_argument(
         "--bucket",
         default="sbecker11-poly-test",
@@ -124,6 +190,22 @@ def build_parser() -> argparse.ArgumentParser:
         default="output.mp3",
         help="Local filename to save the downloaded MP3 to (default: output.mp3).",
     )
+    parser.add_argument(
+        "--text",
+        metavar="TEXT",
+        default=None,
+        help="Text to synthesize (paste or type; use quotes in the shell).",
+    )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read UTF-8 text from standard input (e.g. pbpaste | ... or redirected file).",
+    )
+    parser.add_argument(
+        "--clipboard",
+        action="store_true",
+        help="Read text from the system clipboard (macOS: pbpaste; Linux: xclip/xsel if installed).",
+    )
 
     return parser
 
@@ -148,18 +230,13 @@ def main() -> None:
         raise ValueError(f"Output file is required")
     
 
-    textfile = args.textfile
-    if not is_valid_text_file(textfile):
-        raise ValueError(f"textfile is not valid: {textfile}")
-
-    path = Path(textfile)
-    text = path.read_text(encoding="utf-8").strip()
+    text = get_synthesis_text(args)
     if not text:
-        raise ValueError(f"Text file is empty: {textfile}")
+        raise ValueError("Text is empty after reading input.")
     if len(text) < MIN_TEXT_LENGTH:
-        raise ValueError(f"Text file is too short: {textfile}")
+        raise ValueError(f"Text is too short (minimum {MIN_TEXT_LENGTH} characters).")
     if len(text) > MAX_TEXT_LENGTH:
-        raise ValueError(f"Text file is too long: {textfile}")
+        raise ValueError(f"Text is too long (maximum {MAX_TEXT_LENGTH} characters).")
 
     polly_client = boto3.client("polly", region_name=args.region)
 
@@ -230,6 +307,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
         print(f"{type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(2)
