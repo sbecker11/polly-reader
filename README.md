@@ -49,10 +49,13 @@ You must supply **exactly one** of the following. Combining them (for example a 
 
 After reading from any modality, the text must be non-empty and between **2** and **10,000** characters (inclusive), after strip.
 
+Text up to **6,000** characters uses Polly’s direct `SynthesizeSpeech` API (fast). Longer text uses the async S3 task path (slower).
+
 ## Other useful options
 
 - `--engine` — `standard`, `neural`, or `long-form` (must match Polly; invalid values produce a clear error).
 - `--voice-id` — must be valid for the chosen `--engine` (see error message if not).
+- `--list-voices` — print indexed voice IDs per engine and exit (no synthesis). Use `--list-voices --engine neural` to list only one engine.
 - `--region`, `--bucket`, `--prefix`, `--output-format`, `--output-file` — AWS and output tuning; see `python polly-reader.py --help`.
 
 ## Help

@@ -4,13 +4,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-import boto3
-import os
 import platform
 import time
 
 MAX_TEXT_LENGTH = 10000
 MIN_TEXT_LENGTH = 2
+# AWS Polly SynthesizeSpeech plain-text limit (direct API, no S3 round trip).
+SYNC_MAX_TEXT_LENGTH = 6000
 
 ENGINE_VOICES = {
     "standard": [
@@ -47,6 +47,28 @@ def validate_voice_for_engine(engine: str, voice_id: str) -> None:
             f"Voice '{voice_id}' is not valid for engine '{engine}'. "
             f"Valid voices: {', '.join(valid_voices)}"
         )
+
+
+def print_indexed_voices(engine_filter: str | None = None) -> None:
+    if engine_filter is not None:
+        validate_engine(engine_filter)
+        engines = [engine_filter]
+    else:
+        engines = VALID_ENGINES
+
+    for engine in engines:
+        print(f"[engine: {engine}]")
+        for index, voice_id in enumerate(ENGINE_VOICES[engine]):
+            print(f"  {index}  {voice_id}")
+        if len(engines) > 1:
+            print()
+
+
+def list_voices_engine_filter(args: argparse.Namespace) -> str | None:
+    if "--engine" in sys.argv:
+        validate_engine(args.engine)
+        return args.engine
+    return None
 
 def is_valid_file(file_path: str) -> bool:
     try:
@@ -206,12 +228,95 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Read text from the system clipboard (macOS: pbpaste; Linux: xclip/xsel if installed).",
     )
+    parser.add_argument(
+        "--list-voices",
+        action="store_true",
+        help="Print indexed voice IDs for each engine and exit (use with --engine to limit to one engine).",
+    )
 
     return parser
 
 
+def synthesize_to_file(
+    polly_client,
+    *,
+    text: str,
+    voice_id: str,
+    engine: str,
+    output_format: str,
+    output_file: str,
+    bucket: str,
+    prefix: str,
+) -> None:
+    if len(text) <= SYNC_MAX_TEXT_LENGTH:
+        response = polly_client.synthesize_speech(
+            VoiceId=voice_id,
+            OutputFormat=output_format,
+            Text=text,
+            Engine=engine,
+        )
+        Path(output_file).write_bytes(response["AudioStream"].read())
+        print(f"{output_file} synthesized directly")
+        return
+
+    response = polly_client.start_speech_synthesis_task(
+        VoiceId=voice_id,
+        OutputS3BucketName=bucket,
+        OutputS3KeyPrefix=prefix,
+        OutputFormat=output_format,
+        Text=text,
+        Engine=engine,
+    )
+
+    task_id = response["SynthesisTask"]["TaskId"]
+    print(f"Task id is {task_id} (async; text exceeds {SYNC_MAX_TEXT_LENGTH} characters)")
+
+    output_uri = None
+    while True:
+        status_resp = polly_client.get_speech_synthesis_task(TaskId=task_id)
+        task = status_resp["SynthesisTask"]
+        if task["TaskStatus"] == "completed":
+            output_uri = task["OutputUri"]
+            break
+        if task["TaskStatus"] in ("failed", "cancelled"):
+            raise RuntimeError(task.get("TaskStatusReason", "Polly task failed"))
+        time.sleep(0.5)
+
+    if output_uri is None:
+        raise RuntimeError("Output URI is None")
+
+    import boto3
+
+    s3 = boto3.client("s3", region_name=polly_client.meta.region_name)
+    bucket_name = output_uri.split("/")[3]
+    object_key = "/".join(output_uri.split("/")[4:])
+    s3.download_file(bucket_name, object_key, output_file)
+    print(f"{output_file} downloaded successfully")
+
+
+def play_output_file(output_file: str) -> None:
+    system = platform.system()
+    if system not in ["Darwin", "Windows", "Linux"]:
+        raise RuntimeError(f"Unsupported system: {system}")
+
+    if system == "Darwin":
+        print(f"starting to play {output_file} with afplay on macOS")
+        subprocess.run(["afplay", output_file], check=True)
+        print(f"{output_file} played successfully on macOS")
+    elif system == "Windows":
+        subprocess.run(f'start "" "{output_file}"', shell=True, check=True)
+        print(f"{output_file} started successfully on Windows")
+    else:
+        subprocess.run(["xdg-open", output_file], check=True)
+        print(f"{output_file} launched successfully with xdg-open on Linux")
+
+
 def main() -> None:
     args = build_parser().parse_args()
+
+    if args.list_voices:
+        print_indexed_voices(list_voices_engine_filter(args))
+        return
 
     engine = args.engine
     validate_engine(engine)
@@ -238,44 +343,20 @@ def main() -> None:
     if len(text) > MAX_TEXT_LENGTH:
         raise ValueError(f"Text is too long (maximum {MAX_TEXT_LENGTH} characters).")
 
+    import boto3
+
     polly_client = boto3.client("polly", region_name=args.region)
 
-    response = polly_client.start_speech_synthesis_task(
-        VoiceId=args.voice_id,
-        OutputS3BucketName=args.bucket,
-        OutputS3KeyPrefix=args.prefix,
-        OutputFormat=args.output_format,
-        Text=text,
-        Engine=args.engine,
+    synthesize_to_file(
+        polly_client,
+        text=text,
+        voice_id=args.voice_id,
+        engine=args.engine,
+        output_format=args.output_format,
+        output_file=output_file,
+        bucket=args.bucket,
+        prefix=args.prefix,
     )
-
-    task_id = response["SynthesisTask"]["TaskId"]
-    print(f"Task id is {task_id}")
-
-    output_uri = None
-    while True:
-        status_resp = polly_client.get_speech_synthesis_task(TaskId=task_id)
-        task = status_resp["SynthesisTask"]
-        if task["TaskStatus"] == "completed":
-            output_uri = task["OutputUri"]
-            break
-        if task["TaskStatus"] in ("failed", "cancelled"):
-            raise RuntimeError(task.get("TaskStatusReason", "Polly task failed"))
-        time.sleep(2)
-
-    # gather boto3 arguments from the output URI
-    if output_uri is None:
-        raise RuntimeError("Output URI is None")
-   
-    s3 = boto3.client("s3", region_name=args.region)
-    if s3 is None:
-        raise RuntimeError("S3 client is None")
-
-    bucket_name = output_uri.split("/")[3] 
-    object_key = "/".join(output_uri.split("/")[4:]) 
-   
-    s3.download_file(bucket_name, object_key, output_file)
-    print(f"{output_file} downloaded successfully")
 
     if not is_valid_file(output_file):
         raise RuntimeError(f"{output_file} is not a valid file")
@@ -283,26 +364,7 @@ def main() -> None:
     if not is_valid_mp3_file(output_file):
         raise RuntimeError(f"{output_file} is not a valid mp3 file")
 
-    # get the system
-    system = platform.system()
-    if system is None:
-        raise RuntimeError(f"system is None")
-    if system not in ["Darwin", "Windows", "Linux"]:
-        raise RuntimeError(f"Invalid system: {system}")
-
-    # automatically play the audio file 
-    if system == "Darwin":
-        print(f"starting to play {output_file} with afplay on macOS")
-        subprocess.run(["afplay", output_file], check=True)
-        print(f"{output_file} played successfully on macOS")
-    elif system == "Windows":
-        subprocess.run(f'start "" "{output_file}"', shell=True, check=True)
-        print(f"{output_file} started successfully on Windows")
-    elif system == "Linux":
-        subprocess.run(["xdg-open", output_file], check=True)
-        print(f"{output_file} launched successfully with xdg-open on Linux")
-    else:
-        raise RuntimeError(f"Unsupported system: {system}")
+    play_output_file(output_file)
 
 if __name__ == "__main__":
     try:
