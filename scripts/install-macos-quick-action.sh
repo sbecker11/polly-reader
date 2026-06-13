@@ -53,7 +53,8 @@ from pathlib import Path
 script_path = sys.argv[1]
 output_path = Path(sys.argv[2])
 # zsh -f skips ~/.zshenv and ~/.zshrc (Automator treats their output as errors).
-command_string = f"/bin/zsh -f {script_path}"
+# Pass "$@" so selected text reaches the script when inputMethod is "as arguments".
+command_string = f'/bin/zsh -f {script_path} "$@"'
 
 def uid() -> str:
     return str(uuid.uuid4()).upper()
@@ -91,7 +92,7 @@ workflow = {
                 "ActionName": "Run Shell Script",
                 "ActionParameters": {
                     "COMMAND_STRING": command_string,
-                    "CheckedForUserDefaultShell": True,
+                    "CheckedForUserDefaultShell": False,
                     "inputMethod": 1,
                     "shell": "/bin/zsh",
                     "source": "",
@@ -167,7 +168,7 @@ PY
 
 LAST_VOICE_FILE="${HOME}/.polly-reader-last-voice"
 if [[ ! -f "${LAST_VOICE_FILE}" ]]; then
-  print -r -- "  9  Matthew" > "${LAST_VOICE_FILE}"
+  print -rn -- "  9  Matthew" > "${LAST_VOICE_FILE}"
   echo "Created default last voice: ${LAST_VOICE_FILE}"
 fi
 

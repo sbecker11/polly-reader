@@ -40,18 +40,18 @@ If the menu item does not show up, quit and reopen the app, or run:
 3. Pick a **numbered voice** row (not an `[engine: …]` heading).
 4. Short text is synthesized directly (fast); audio plays via `afplay`.
 
-The installer sets **Pass input: stdin** and disables Automator’s **Show when run** dialog, so you only see the voice picker. Your last chosen voice is remembered in `~/.polly-reader-last-voice` and pre-selected next time.
+The installer sets **Pass input: as arguments** (`"$@"` forwarded to the script) and disables Automator’s **Show when run** dialog, so you only see the voice picker. Your last chosen voice is remembered in `~/.polly-reader-last-voice` and pre-selected next time.
 
 ## Manual Automator setup (optional)
 
 If you prefer not to use the installer:
 
 1. Automator → **Quick Action** → receives **text** in **any application**
-2. **Run Shell Script** → shell `/bin/zsh` → pass input **to stdin**
+2. **Run Shell Script** → shell `/bin/zsh` → pass input **as arguments**
 3. One line:
 
    ```zsh
-   /bin/zsh -f /Users/sbecker11/workspace-aws-polly/polly-reader/scripts/read-selection-with-polly.sh
+   /bin/zsh -f /Users/sbecker11/workspace-aws-polly/polly-reader/scripts/read-selection-with-polly.sh "$@"
    ```
 
    Use `zsh -f` so Automator does not source `~/.zshenv` (which can break the action with spurious errors).
@@ -63,7 +63,7 @@ If you prefer not to use the installer:
 | Problem | What to try |
 |---------|-------------|
 | Not in right-click menu | Enable in **Keyboard Shortcuts → Services**; run `pbs -flush`; restart app |
-| “No text received” | Select text before invoking the action |
+| “No text received” | Re-run `./scripts/install-macos-quick-action.sh` (workflow must pass `"$@"`); select text before invoking |
 | “Not a voice” | Choose a numbered voice, not an engine heading |
 | Slow or errors | Run smoke test in Terminal; check AWS credentials |
 | Text too long | Max **10,000** characters |

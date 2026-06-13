@@ -1,7 +1,7 @@
 #!/bin/zsh
 # macOS Quick Action helper: read selected text with polly-reader.
-# Automator: Quick Action receives "text", Run Shell Script, pass input "to stdin", run:
-#   /Users/sbecker11/workspace-aws-polly/polly-reader/scripts/read-selection-with-polly.sh
+# Automator: Quick Action receives "text", Run Shell Script, pass input "as arguments", run:
+#   /bin/zsh -f /Users/sbecker11/workspace-aws-polly/polly-reader/scripts/read-selection-with-polly.sh "$@"
 #
 # Standalone: echo "Hello." | ./scripts/read-selection-with-polly.sh
 
@@ -28,13 +28,16 @@ if [[ ! -f "${READER}" ]]; then
   exit 1
 fi
 
-TEXT="$(cat)"
-if [[ -z "${TEXT//[$'\t\r\n ']}" && $# -gt 0 ]]; then
+# Automator may pass selected text as arguments ("as arguments") or stdin ("to stdin").
+TEXT=""
+if (( $# > 0 )); then
   TEXT="$*"
+elif ! [[ -t 0 ]]; then
+  TEXT="$(cat)"
 fi
 if [[ -z "${TEXT//[$'\t\r\n ']}" ]]; then
   osascript -e 'display alert "No text received" message "Select some text first, then run the Quick Action again."'
-  exit 1
+  exit 0
 fi
 
 if [[ ! -f "${VOICES_CACHE}" || "${READER}" -nt "${VOICES_CACHE}" ]]; then
@@ -67,28 +70,27 @@ trap 'rm -f "${ITEMS_FILE}"' EXIT INT TERM
 printf '%s\n' "${ITEMS[@]}" > "${ITEMS_FILE}"
 
 if [[ ! -f "${LAST_VOICE_FILE}" ]]; then
-  print -r -- "${DEFAULT_VOICE_LINE}" > "${LAST_VOICE_FILE}"
+  print -rn -- "${DEFAULT_VOICE_LINE}" > "${LAST_VOICE_FILE}"
 fi
 
 DEFAULT_PICK=""
+DEFAULT_INDEX=0
 if [[ -f "${LAST_VOICE_FILE}" ]]; then
-  DEFAULT_PICK="$(<"${LAST_VOICE_FILE}")"
-  found=0
-  for item in "${ITEMS[@]}"; do
-    if [[ "${item}" == "${DEFAULT_PICK}" ]]; then
-      found=1
+  DEFAULT_PICK="${${(f)"$(<"${LAST_VOICE_FILE}")"}[1]}"
+  for i in {1..${#ITEMS[@]}}; do
+    if [[ "${ITEMS[$i]}" == "${DEFAULT_PICK}" ]]; then
+      DEFAULT_INDEX=$i
       break
     fi
   done
-  (( found )) || DEFAULT_PICK=""
 fi
 
-if [[ -n "${DEFAULT_PICK}" ]]; then
+if (( DEFAULT_INDEX > 0 )); then
   PICK="$(osascript <<APPLESCRIPT
 set itemsPath to POSIX file "${ITEMS_FILE}"
 set voiceList to paragraphs of (read itemsPath)
-set defaultPick to "${DEFAULT_PICK//\"/\\\"}"
-set picked to choose from list voiceList with prompt "Choose Polly voice:" default items {defaultPick}
+set defaultItem to item ${DEFAULT_INDEX} of voiceList
+set picked to choose from list voiceList with prompt "Choose Polly voice:" default items {defaultItem}
 if picked is false then
   return ""
 end if
@@ -127,7 +129,7 @@ if [[ -z "${ENGINE}" || -z "${VOICE}" ]]; then
   exit 1
 fi
 
-print -r -- "${PICK}" > "${LAST_VOICE_FILE}"
+print -rn -- "${PICK}" > "${LAST_VOICE_FILE}"
 
 printf '%s' "${TEXT}" | "${PYTHON}" "${READER}" --stdin --engine "${ENGINE}" --voice-id "${VOICE}"
 EXIT=$?
