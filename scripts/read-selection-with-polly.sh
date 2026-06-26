@@ -76,7 +76,7 @@ fi
 DEFAULT_PICK=""
 DEFAULT_INDEX=0
 if [[ -f "${LAST_VOICE_FILE}" ]]; then
-  DEFAULT_PICK="${${(f)"$(<"${LAST_VOICE_FILE}")"}[1]}"
+  DEFAULT_PICK="$(<"${LAST_VOICE_FILE}")"
   for i in {1..${#ITEMS[@]}}; do
     if [[ "${ITEMS[$i]}" == "${DEFAULT_PICK}" ]]; then
       DEFAULT_INDEX=$i
@@ -85,7 +85,11 @@ if [[ -f "${LAST_VOICE_FILE}" ]]; then
   done
 fi
 
-if (( DEFAULT_INDEX > 0 )); then
+# Re-use last voice silently; set POLLY_ASK_VOICE=1 to always show the picker.
+PICK=""
+if (( DEFAULT_INDEX > 0 )) && [[ "${POLLY_ASK_VOICE:-0}" != 1 ]]; then
+  PICK="${ITEMS[$DEFAULT_INDEX]}"
+elif (( DEFAULT_INDEX > 0 )); then
   PICK="$(osascript <<APPLESCRIPT
 set itemsPath to POSIX file "${ITEMS_FILE}"
 set voiceList to paragraphs of (read itemsPath)

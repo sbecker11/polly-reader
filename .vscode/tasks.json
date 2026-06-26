@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Polly: Start reading selection",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/hotkey-start-polly.sh",
+      "presentation": {
+        "reveal": "never",
+        "echo": false,
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Polly: Stop reading selection",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/stop-reading-with-polly.sh",
+      "presentation": {
+        "reveal": "never",
+        "echo": false,
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}
